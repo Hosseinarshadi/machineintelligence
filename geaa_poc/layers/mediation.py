@@ -58,12 +58,14 @@ def _detect_injection_signals(tool_name: str, args: dict, task_description: str)
         if pattern.search(text):
             signals.append(f"injection keyword: {pattern.pattern}")
 
-    # Trajectory shift: tool completely unrelated to original task keywords
-    task_tokens = set(re.findall(r"\w+", task_description.lower()))
-    tool_tokens  = set(re.findall(r"\w+", text.lower()))
-    overlap = task_tokens & tool_tokens
-    if len(task_tokens) > 5 and len(overlap) < 2:
-        signals.append("trajectory_shift: low token overlap with original task")
+    # Trajectory shift: tool arguments reference data unrelated to original task.
+    # Only flag if args are non-trivial AND share zero content words with the original task.
+    if text.strip() and len(text.split()) > 3:
+        task_tokens = set(re.findall(r"[a-z]{4,}", task_description.lower()))
+        arg_tokens  = set(re.findall(r"[a-z]{4,}", text.lower()))
+        overlap = task_tokens & arg_tokens
+        if len(task_tokens) > 4 and len(arg_tokens) > 2 and len(overlap) == 0:
+            signals.append("trajectory_shift: zero content-word overlap with original task")
 
     return bool(signals), signals
 
