@@ -41,7 +41,7 @@ from agentdojo.types import (
 from bandit.thompson import ThompsonSamplingBandit
 from layers.delegation import DelegationBoundaryLayer
 from layers.identity import IdentityStructuringLayer
-from layers.mediation import ContinuousMediationLayer, _detect_injection_signals, _compute_severity
+from layers.mediation import ContinuousMediationLayer, _detect_injection_signals, _compute_severity, _INJECTION_PATTERNS
 from models import AuthorityTier, GovernanceAction, PermissionSet
 
 
@@ -112,6 +112,25 @@ def _is_string_list(s: str) -> bool:
         return isinstance(literal_eval(s), list)
     except (ValueError, SyntaxError):
         return False
+
+
+def _scan_text_for_injection(text: str) -> bool:
+    """Return True if any GEAA injection pattern matches in the given text."""
+    for pattern in _INJECTION_PATTERNS:
+        if pattern.search(text):
+            return True
+    return False
+
+
+def _extract_result_text(msg) -> str:
+    """Pull all text out of a ChatToolResultMessage content block list."""
+    parts = []
+    for block in msg.get("content") or []:
+        if isinstance(block, dict):
+            parts.append(block.get("text", ""))
+        else:
+            parts.append(getattr(block, "text", ""))
+    return " ".join(parts)
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +230,10 @@ class GEAAMediationExecutor(BasePipelineElement):
         perm_set: PermissionSet | None        = extra_args.get("geaa_perm_set")
         task_context: str                     = query
 
+        # Consume result-injection flag from the previous loop iteration.
+        # Set by scanning approved tool returns for embedded injection content.
+        prior_injection: bool = extra_args.pop("geaa_result_injection", False)
+
         tool_results: list[ChatToolResultMessage] = []
 
         for tool_call in tool_calls:
@@ -245,10 +268,10 @@ class GEAAMediationExecutor(BasePipelineElement):
                 continue
 
             # ----------------------------------------------------------------
-            # GEAA CML evaluation
+            # GEAA CML evaluation (carries prior result-injection context)
             # ----------------------------------------------------------------
             if cml and perm_set:
-                med_result = cml.evaluate(fn_name, fn_args, perm_set)
+                med_result = cml.evaluate(fn_name, fn_args, perm_set, prior_injection=prior_injection)
                 extra_args["geaa_decisions"].append(med_result)
                 if med_result.reason:
                     sigs = [s for s in med_result.reason.split("; ") if "injection_signals" in s]
@@ -312,14 +335,20 @@ class GEAAMediationExecutor(BasePipelineElement):
 
             result, error = runtime.run_function(env, fn_name, fn_args)
             formatted = _tool_result_to_str(result)
-            tool_results.append(
-                ChatToolResultMessage(
-                    role="tool",
-                    content=[text_content_block_from_string(formatted)],
-                    tool_call_id=tool_call.id,
-                    tool_call=tool_call,
-                    error=error,
-                )
+            result_msg = ChatToolResultMessage(
+                role="tool",
+                content=[text_content_block_from_string(formatted)],
+                tool_call_id=tool_call.id,
+                tool_call=tool_call,
+                error=error,
             )
+            tool_results.append(result_msg)
+
+            # Scan the returned content for embedded injection patterns.
+            # If found, set flag so the NEXT tool call's CML evaluation knows
+            # prior content was poisoned (catches content-borne attacks like
+            # important_instructions where injection lives in data, not args).
+            if not error and _scan_text_for_injection(formatted):
+                extra_args["geaa_result_injection"] = True
 
         return query, runtime, env, [*messages, *tool_results], extra_args

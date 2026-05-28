@@ -53,8 +53,9 @@ class ThompsonSamplingBandit:
 
     def __init__(self, state_path: str | None = None):
         n_ctx = N_TIERS * N_BANDS
-        self.alpha = np.full((n_ctx, N_ARMS), BANDIT_ALPHA_INIT)
-        self.beta  = np.full((n_ctx, N_ARMS), BANDIT_BETA_INIT)
+        # Arm-specific priors: [APPROVE, DOWNGRADE, TERMINATE]
+        self.alpha = np.tile(np.array(BANDIT_ALPHA_INIT, dtype=float), (n_ctx, 1))
+        self.beta  = np.tile(np.array(BANDIT_BETA_INIT,  dtype=float), (n_ctx, 1))
         self.pulls = np.zeros((n_ctx, N_ARMS), dtype=int)
         self.state_path = Path(state_path) if state_path else None
 

@@ -117,10 +117,14 @@ class ContinuousMediationLayer:
         tool_name: str,
         args: dict,
         permission_set: PermissionSet,
+        prior_injection: bool = False,
     ) -> MediationResult:
         """
         Main mediation decision point.
         Returns a MediationResult with the governance action and full diagnostics.
+
+        prior_injection: True when a prior tool's RESULT contained injection patterns
+                         (content-borne attacks like important_instructions).
         """
         tier = permission_set.tier
 
@@ -139,9 +143,12 @@ class ContinuousMediationLayer:
             )
 
         # ----------------------------------------------------------------
-        # 2. Injection signal detection
+        # 2. Injection signal detection (args + result-content carry-forward)
         # ----------------------------------------------------------------
         injected, signals = _detect_injection_signals(tool_name, args, self._original_task)
+        if prior_injection and not injected:
+            injected = True
+            signals.append("result_content_injection: injection pattern found in prior tool output")
 
         # ----------------------------------------------------------------
         # 3. Severity score computation
